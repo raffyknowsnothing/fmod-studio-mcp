@@ -20,10 +20,13 @@ schema-validated operation over FMOD's object model.
 
 ## How it works
 
-FMOD Studio's scripting console (open it in Studio with **Ctrl + 0**) listens on a TCP
-port and evaluates anything it receives as UTF-8 JavaScript, returning the result as
-text. This server keeps one connection and uses *read-until-idle* framing, so it doesn't
-depend on a particular prompt string.
+FMOD Studio's **Script Server** exposes the scripting terminal over a TCP port: it
+evaluates anything it receives as UTF-8 JavaScript and returns the result as text.
+**It's disabled by default** — enable it once in Studio's preferences (see
+[FMOD Studio setup](#fmod-studio-setup--enable-the-script-server)). Opening the console
+with **Ctrl + 0** shows script output but does **not** start the server. This MCP keeps
+one connection and uses *read-until-idle* framing, so it doesn't depend on a particular
+prompt string.
 
 Each tool generates the small piece of scripting-API JavaScript for its member, runs it,
 and returns the result as a string. Anything that returns an object reports that object's
@@ -61,9 +64,54 @@ string. Settable properties take an optional `value` (omit to read).
 
 ## Requirements
 
-- **FMOD Studio 2.02+**, with a project open and the **scripting console enabled** (Ctrl+0,
-  which starts the TCP listener on port 3663 — the console shows the IP/port).
+- **FMOD Studio 2.02+**, with a project open and the **Script Server enabled**
+  (Preferences → *Interface* → *Script Server*, port **3663** — **requires a restart**; see
+  [FMOD Studio setup](#fmod-studio-setup--enable-the-script-server) below). Opening the
+  console (Ctrl+0) alone does **not** start it.
 - Python 3.10+.
+
+## FMOD Studio setup — enable the Script Server
+
+The scripting terminal's TCP server (**Script Server**) is **off by default**, and opening
+the console with **Ctrl + 0 is not enough** — that only shows script output. Enable it once:
+
+1. Launch **FMOD Studio** and open your project (`File → Open Project…` → your `.fspro`).
+2. Open **Preferences** — `FMOD Studio → Preferences…` (**⌘,**) on macOS, `Edit → Preferences…`
+   on Windows.
+3. Select the **Interface** tab — the **Script Server** section is at the top. Set:
+   - ✅ **Enable Script Server (requires restart)**
+   - **Port:** `3663` (must match `FMOD_STUDIO_PORT`, default `3663`).
+4. **Quit and relaunch FMOD Studio**, then reopen the project. The setting only takes effect
+   after a restart.
+5. *(optional)* Open the console with **Ctrl + 0** to watch script output as tools run.
+
+### Verify it's listening
+
+```bash
+# macOS / Linux
+nc -z 127.0.0.1 3663 && echo "listening ✓"
+lsof -nP -iTCP:3663 -sTCP:LISTEN          # shows the fmodstudio process bound to 3663
+```
+
+On every launch, FMOD records the Script Server state in its log:
+
+```
+[Scripting] ScriptServer started on 127.0.0.1 (3663)   ← enabled  ✅
+[Scripting] ScriptServer is disabled.                  ← not enabled ❌
+```
+
+Log location: macOS `~/Library/Application Support/FMOD Studio/Logs/`,
+Windows `%LOCALAPPDATA%\FMOD Studio\Logs\` (newest file).
+
+### Troubleshooting
+
+- **`Cannot reach FMOD Studio's scripting terminal…`** — the Script Server isn't running.
+  Grep the newest log for `ScriptServer is disabled`; if present, enable it in Preferences
+  and **restart** (the checkbox literally says *"requires restart"* — toggling without
+  relaunching won't bind the port).
+- **Enabled but still nothing on 3663** — confirm a **project is open** (the server won't
+  bind on the start/welcome screen) and that no other app holds the port.
+- **Port mismatch** — the Preferences port and `FMOD_STUDIO_PORT` must be the same value.
 
 ## Install
 
