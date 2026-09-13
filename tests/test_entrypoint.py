@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import time
+import threading
 
 EXPECTED_TOOL_COUNT = 155
 GENERIC_TOOLS = {
@@ -25,41 +25,58 @@ GENERIC_TOOLS = {
 }
 
 
-def handshake() -> dict:
-    """Start the server, list its tools, and return the parsed replies."""
-    payload = "\n".join(
-        json.dumps(msg)
-        for msg in (
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize",
-             "params": {"protocolVersion": "2025-06-18", "capabilities": {},
-                        "clientInfo": {"name": "test", "version": "1.0"}}},
-            {"jsonrpc": "2.0", "method": "notifications/initialized"},
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        )
-    ) + "\n"
+INITIALIZE = {
+    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+    "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+               "clientInfo": {"name": "test", "version": "1.0"}},
+}
+INITIALIZED = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+
+
+def _drive(*messages: dict, expected: int = 2, timeout: float = 25.0) -> dict:
+    """Start the server, send these messages, and return the replies by id.
+
+    Replies are collected until every expected id has arrived, so a slow start
+    cannot truncate the run the way a fixed sleep can.
+    """
+    payload = "\n".join(json.dumps(msg) for msg in messages) + "\n"
 
     proc = subprocess.Popen(
         [sys.executable, "-m", "fmod_studio_mcp"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     assert proc.stdin and proc.stdout
+    replies: dict = {}
+    arrived = threading.Event()
+
+    def collect() -> None:
+        for line in proc.stdout:  # type: ignore[union-attr]
+            line = line.strip()
+            if line.startswith("{"):
+                message = json.loads(line)
+                if "id" in message:
+                    replies[message["id"]] = message
+                    if len(replies) >= expected:
+                        break
+        arrived.set()
+
+    reader = threading.Thread(target=collect, daemon=True)
+    reader.start()
     proc.stdin.write(payload)
     proc.stdin.flush()
-    # Give the server time to answer before closing its stdin, otherwise it can
-    # exit mid-reply and the last response is lost.
-    time.sleep(1.5)
+    # Closing stdin is what lets the server exit, so it happens once every
+    # expected reply has landed rather than after a guessed delay.
+    arrived.wait(timeout)
     proc.stdin.close()
-    out = proc.stdout.read()
     proc.wait(timeout=15)
-
-    replies = {}
-    for line in out.splitlines():
-        line = line.strip()
-        if line.startswith("{"):
-            message = json.loads(line)
-            if "id" in message:
-                replies[message["id"]] = message
+    reader.join(timeout=5)
     return replies
+
+
+def handshake() -> dict:
+    """Start the server, list its tools, and return the parsed replies."""
+    return _drive(INITIALIZE, INITIALIZED,
+                  {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
 
 
 def test_python_dash_m_starts_a_server_that_lists_its_tools():
@@ -82,3 +99,28 @@ def test_every_listed_tool_has_a_usable_schema():
         assert schema["type"] == "object"
         for required in schema.get("required", []):
             assert required in schema["properties"], f"{tool['name']} requires unknown {required}"
+
+
+def call_tool(name: str, arguments: dict) -> dict:
+    """Start the server and call one tool, returning the raw JSON-RPC reply."""
+    return _drive(INITIALIZE, INITIALIZED,
+                  {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                   "params": {"name": name, "arguments": arguments}})
+
+
+def test_a_call_result_reaches_the_client_intact():
+    """Our handler returns a ``types.CallToolResult``, and the MCP SDK only
+    recognises that type from 1.19.0 — see the bounds in ``pyproject.toml``.
+    Older versions feed it to ``list(results)`` instead, which turns the
+    pydantic model into ``(field, value)`` tuples, so every call fails
+    validation and the failure flag is lost.
+
+    Stubbing the terminal never reaches that code, so this drives a real call
+    over stdio. An unknown tool name is used because the server answers it
+    without a live FMOD Studio, and it still exercises the whole result path.
+    """
+    result = call_tool("fmod_nope", {})[2]["result"]
+    assert result["isError"] is True
+    # The exact text matters: a framework validation error would also be marked
+    # as an error, so only our own message proves the result survived intact.
+    assert result["content"][0]["text"] == "ERROR: unknown tool fmod_nope"
