@@ -47,8 +47,18 @@ PARAM_DT = re.compile(r"<dt[^>]*>(.*?)</dt>\s*<dd[^>]*>(.*?)</dd>", re.S)
 
 
 def fetch(slug):
-    return subprocess.run(["curl", "-sL", "-A", "Mozilla/5.0", BASE.format(slug)],
-                          capture_output=True, text=True, timeout=30).stdout
+    """Fetch one page of the reference.
+
+    Raises if curl failed. An empty page parses to zero members, which would
+    quietly drop tools from the generated spec.
+    """
+    url = BASE.format(slug)
+    proc = subprocess.run(["curl", "-sL", "-A", "Mozilla/5.0", url],
+                          capture_output=True, text=True, timeout=30)
+    if proc.returncode != 0:
+        raise RuntimeError(f"Could not fetch {slug!r} from {url}: "
+                           f"curl exited {proc.returncode}: {proc.stderr.strip()}")
+    return proc.stdout
 
 
 def text_of(html):

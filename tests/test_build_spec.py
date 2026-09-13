@@ -26,6 +26,28 @@ def load_build_spec():
 build_spec = load_build_spec()
 
 
+class FakeCompleted:
+    def __init__(self, returncode: int, stdout: str = "", stderr: str = ""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_a_successful_fetch_returns_the_page(monkeypatch):
+    monkeypatch.setattr(build_spec.subprocess, "run",
+                        lambda *a, **k: FakeCompleted(0, "<html>ok</html>"))
+    assert build_spec.fetch("globals") == "<html>ok</html>"
+
+
+def test_a_failed_fetch_is_an_error_not_an_empty_page(monkeypatch):
+    """Silently crawling nothing would drop members from the spec without a word."""
+    monkeypatch.setattr(build_spec.subprocess, "run",
+                        lambda *a, **k: FakeCompleted(22, "", "curl: (22) 404"))
+    with pytest.raises(RuntimeError) as caught:
+        build_spec.fetch("globals")
+    assert "globals" in str(caught.value)
+
+
 @pytest.mark.parametrize("signature, expected", [
     ("system.getText(msg[, defaultText])", [("msg", False), ("defaultText", True)]),
     ("f(a, b)", [("a", False), ("b", False)]),

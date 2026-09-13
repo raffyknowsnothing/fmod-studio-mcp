@@ -33,12 +33,26 @@ SPEC_PATH = os.path.join(os.path.dirname(__file__), "api_spec.json")
 # A JS helper, prepended to every generated script, that renders any result as a
 # stable string: objects -> their path or id (so results can be chained back in as
 # a `target`), arrays -> a JSON list of the same, primitives -> String().
+#
+# Objects that are neither managed (no getPath, no id) nor primitive are the gap:
+# `studio.version` is one, and it carries a useful toString(), while a schema map
+# like Event.relationships carries none and is only readable as JSON. So: prefer
+# toString() when it says something, otherwise fall back to JSON, bounded so a
+# large object cannot pour into the model's context.
 _DESC = (
+    "var __DESC_MAX = 4000;"
     "function __desc(x){"
     "if(x===null||x===undefined)return String(x);"
     "if(Array.isArray(x))return JSON.stringify(x.map(__desc));"
-    "if(typeof x==='object')return (typeof x.getPath==='function'?x.getPath():"
-    "(x.id!==undefined?x.id:'[object]'));"
+    "if(typeof x==='object'){"
+    "if(typeof x.getPath==='function')return x.getPath();"
+    "if(x.id!==undefined)return String(x.id);"
+    "var __s=String(x);"
+    "if(__s!=='[object Object]')return __s;"
+    "try{var __j=JSON.stringify(x);"
+    "if(__j!==undefined)return __j.length>__DESC_MAX?"
+    "__j.slice(0,__DESC_MAX)+'\u2026 ('+__j.length+' chars total)':__j;}catch(e){}"
+    "return __s;}"
     "return String(x);}"
 )
 

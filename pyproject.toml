@@ -17,7 +17,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Sound/Audio",
 ]
-dependencies = ["mcp>=1.0.0"]
+# mcp 2.x removed the Server.list_tools / Server.call_tool decorators this server
+# is built on, so the upper bound is required, not caution.
+dependencies = ["mcp>=1.0.0,<2"]
 
 [dependency-groups]
 dev = ["pytest>=8"]

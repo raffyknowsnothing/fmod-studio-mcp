@@ -49,6 +49,10 @@ def test_an_entity_member_is_reached_through_the_model():
     assert 'studio.project.model["Event"]' in script
 
 
+def test_a_global_member_is_a_bare_call():
+    assert _GENERATED["fmod_global_alert"].build_js({"msg": "hi"}).startswith("var __DESC_MAX")
+
+
 def test_a_property_reads_when_no_value_is_given():
     script = _GENERATED["fmod_project_filePath"].build_js({})
     assert script.endswith("__desc(studio.project.filePath);")
