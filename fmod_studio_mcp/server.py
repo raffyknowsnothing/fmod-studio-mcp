@@ -60,13 +60,14 @@ def _run(script: str, overall: float = _REPLY_WINDOW) -> types.CallToolResult:
     """Run a script on the live terminal and report it as a tool result.
 
     A script error or an unreachable terminal is a failed call, marked as one, so
-    a failure cannot be mistaken for a value.
+    a failure cannot be mistaken for a value. An empty string is a value and is
+    passed through; only a terminal that sent nothing says "(no output)".
     """
     try:
         reply = TERMINAL.run(script, overall=overall)
     except FmodTerminalError as exc:
         return _result(f"ERROR: {exc}", is_error=True)
-    return _result(reply or _NO_OUTPUT)
+    return _result(_NO_OUTPUT if reply is None else reply)
 
 
 # ---------------------------------------------------------------------------

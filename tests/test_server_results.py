@@ -23,7 +23,7 @@ class FakeTerminal:
         self.error = error
         self.scripts: list[str] = []
 
-    def run(self, script: str, **kwargs) -> str:
+    def run(self, script: str, **kwargs) -> str | None:
         self.scripts.append(script)
         if self.error is not None:
             raise self.error
@@ -62,8 +62,17 @@ def test_a_script_error_is_a_failed_result(terminal):
     assert "ReferenceError" in result.content[0].text
 
 
-def test_an_empty_reply_says_so(terminal):
+def test_an_empty_value_is_reported_as_empty(terminal):
+    """A property that holds an empty string is a value, not silence. Reading one
+    used to answer "(no output)", which reads as a call that did nothing."""
     terminal(reply="")
+    result = server._run("x")
+    assert result.isError is False
+    assert result.content[0].text == ""
+
+
+def test_no_reply_at_all_says_so(terminal):
+    terminal(reply=None)
     result = server._run("x")
     assert result.isError is False
     assert result.content[0].text == "(no output)"

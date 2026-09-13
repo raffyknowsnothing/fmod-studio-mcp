@@ -65,8 +65,13 @@ def split_messages(reply: str) -> list[tuple[str, str]]:
     return messages
 
 
-def format_reply(reply: str) -> str:
+def format_reply(reply: str) -> str | None:
     """Render a raw terminal reply as the text a caller should see.
+
+    Returns ``None`` when the reply carried no messages at all. That is silence,
+    and it is not the same as a value: an empty string is a value, and it comes
+    back as ``""``. Joining both to ``""`` is what let the server report an empty
+    property as though the call had produced nothing.
 
     Raises :class:`FmodTerminalError` if the script reported an error, so a
     failed call cannot be mistaken for a successful one.
@@ -75,6 +80,8 @@ def format_reply(reply: str) -> str:
     errors = [text for kind, text in messages if kind == "error"]
     if errors:
         raise FmodTerminalError("\n".join(errors))
+    if not messages:
+        return None
     return "\n".join(text for kind, text in messages)
 
 
@@ -137,8 +144,11 @@ class FmodTerminal:
             chunks.append(data)
         return b"".join(chunks).decode("utf-8", errors="replace")
 
-    def run(self, script: str, idle: float = READ_IDLE, overall: float = READ_WINDOW) -> str:
+    def run(self, script: str, idle: float = READ_IDLE, overall: float = READ_WINDOW) -> str | None:
         """Send `script` to the terminal and return its reply text.
+
+        Returns ``None`` when the terminal sent nothing at all. An empty string
+        means the script's value was an empty string.
 
         `idle`/`overall` tune the read window — bump `overall` for slow ops like
         `studio.project.build()`.

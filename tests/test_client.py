@@ -27,6 +27,9 @@ LOG_REPLY = b"log(): before\r\n\x00"
 ERROR_REPLY = b"error(): ReferenceError: 'x' is not defined\r\n\r\n\x00"
 LOG_THEN_ERROR_REPLY = b"log(): before\r\n\x00error(): ReferenceError: 'x' is not defined\r\n\r\n\x00"
 EMPTY_REPLY = b"\x00"
+# Captured from a live terminal: a property holding an empty string answers
+# `out(): `, which is one message whose text is empty.
+EMPTY_VALUE_REPLY = b"out(): \r\n\r\n\x00"
 
 
 class FakeSocket:
@@ -95,8 +98,19 @@ def test_console_output_is_returned_as_text():
     assert terminal_replying(LOG_REPLY).run("console.log('before')") == "before"
 
 
-def test_an_empty_reply_is_an_empty_string():
-    assert terminal_replying(EMPTY_REPLY).run("x") == ""
+def test_an_empty_string_value_comes_back_as_an_empty_string():
+    """An empty string is a value. It must survive as one."""
+    assert terminal_replying(EMPTY_VALUE_REPLY).run("x") == ""
+
+
+def test_nothing_arriving_is_not_an_empty_value():
+    """A read that returns no messages at all is silence, not a value.
+
+    Both cases used to come back as ``""``, so a caller could not tell an empty
+    property from a call that produced nothing, and the server reported the
+    first as though it were the second.
+    """
+    assert terminal_replying(EMPTY_REPLY).run("x") is None
 
 
 def test_an_error_reply_is_reported_as_an_error():
