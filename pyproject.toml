@@ -19,6 +19,9 @@ classifiers = [
 ]
 dependencies = ["mcp>=1.0.0"]
 
+[dependency-groups]
+dev = ["pytest>=8"]
+
 [project.urls]
 Repository = "https://github.com/EYamanS/fmod-studio-mcp"
 Issues = "https://github.com/EYamanS/fmod-studio-mcp/issues"

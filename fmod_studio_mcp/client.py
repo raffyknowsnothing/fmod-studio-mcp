@@ -19,6 +19,15 @@ import time
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 3663
 
+# All windows are seconds. "Idle" is how long the socket must stay quiet before a
+# reply is considered finished; "window" is the hard deadline for the whole read.
+CONNECT_TIMEOUT = 5.0   # waiting for the TCP connection itself
+BANNER_IDLE = 0.3       # the greeting on connect ends after this much silence
+BANNER_WINDOW = 2.0
+READ_IDLE = 0.4         # a script's reply usually arrives in one go
+READ_WINDOW = 30.0      # overridden per call: a project build needs longer
+RECV_BYTES = 65536
+
 # The terminal echoes an evaluated expression's value prefixed with "out(): "
 # (and runtime errors with "error(): "). Strip the success prefix so callers get
 # the bare value; leave the error prefix intact as a signal.
@@ -36,7 +45,7 @@ class FmodTerminalError(RuntimeError):
 
 class FmodTerminal:
     def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
-                 connect_timeout: float = 5.0):
+                 connect_timeout: float = CONNECT_TIMEOUT):
         self.host = host
         self.port = port
         self.connect_timeout = connect_timeout
@@ -58,7 +67,7 @@ class FmodTerminal:
             ) from exc
         self._sock = sock
         # Swallow any connection banner / initial prompt.
-        self._read_until_idle(idle=0.3, overall=2.0)
+        self._read_until_idle(idle=BANNER_IDLE, overall=BANNER_WINDOW)
 
     def close(self) -> None:
         if self._sock is not None:
@@ -79,7 +88,7 @@ class FmodTerminal:
         self._sock.settimeout(idle)
         while time.monotonic() < deadline:
             try:
-                data = self._sock.recv(65536)
+                data = self._sock.recv(RECV_BYTES)
             except socket.timeout:
                 break
             except OSError:
@@ -89,7 +98,7 @@ class FmodTerminal:
             chunks.append(data)
         return b"".join(chunks).decode("utf-8", errors="replace")
 
-    def run(self, script: str, idle: float = 0.4, overall: float = 30.0) -> str:
+    def run(self, script: str, idle: float = READ_IDLE, overall: float = READ_WINDOW) -> str:
         """Send `script` to the terminal and return its reply text.
 
         `idle`/`overall` tune the read window — bump `overall` for slow ops like

@@ -162,8 +162,8 @@ class GeneratedTool:
                     else f"{recv}.{s['member']}")
             expr = f"{call}({', '.join(arg_js)})"
         else:
-            access = s["member"] if s["target_kind"] == "global" else (
-                f"{recv}.{s['member']}" if recv else s["member"])
+            # Only a global member has no receiver, and it is handled above.
+            access = s["member"] if s["target_kind"] == "global" else f"{recv}.{s['member']}"
             if not s["immutable"] and args.get("value") is not None:
                 expr = f"({access} = {embed_value(args['value'])})"
             else:
