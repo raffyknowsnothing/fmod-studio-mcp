@@ -44,6 +44,16 @@ def test_an_instance_member_is_reached_by_lookup():
     assert 'studio.project.lookup("bank:/Master")' in script
 
 
+def test_an_instance_target_says_which_entity_it_must_be():
+    """``getPath`` is defined on Event and Bank, not on every object — calling it
+    on a folder throws inside Studio. The schema has to name the expected type,
+    otherwise the caller cannot tell 'event:/SFX/Hit' from 'event:/'."""
+    for name in ("fmod_Event_getPath", "fmod_Bank_getPath", "fmod_Timeline_getCursorPosition"):
+        target = _GENERATED[name].input_schema()["properties"]["target"]["description"]
+        owner = _GENERATED[name].spec["owner"]
+        assert owner in target, f"{name} does not name {owner}"
+
+
 def test_an_entity_member_is_reached_through_the_model():
     script = _GENERATED["fmod_entity_findInstances"].build_js({"className": "Event"})
     assert 'studio.project.model["Event"]' in script
