@@ -35,6 +35,13 @@ _REPLY_WINDOW = 30.0
 _BUILD_WINDOW = 180.0
 _NO_OUTPUT = "(no output)"
 
+# Tool name -> (method to call on the relationship, what the reply says happened).
+# A table, so the word reported back can never drift from the method called.
+_RELATIONSHIP_OPS = {
+    "fmod_add_relationship": ("add", "added"),
+    "fmod_remove_relationship": ("remove", "removed"),
+}
+
 app = Server("fmod-studio-mcp")
 TERMINAL = FmodTerminal(HOST, PORT)
 
@@ -43,12 +50,23 @@ def _q(value) -> str:
     return json.dumps(str(value))
 
 
-def _run(script: str, overall: float = _REPLY_WINDOW) -> str:
+def _result(text: str, *, is_error: bool = False) -> types.CallToolResult:
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=text)], isError=is_error
+    )
+
+
+def _run(script: str, overall: float = _REPLY_WINDOW) -> types.CallToolResult:
+    """Run a script on the live terminal and report it as a tool result.
+
+    A script error or an unreachable terminal is a failed call, marked as one, so
+    a failure cannot be mistaken for a value.
+    """
     try:
         reply = TERMINAL.run(script, overall=overall)
     except FmodTerminalError as exc:
-        return f"ERROR: {exc}"
-    return reply or _NO_OUTPUT
+        return _result(f"ERROR: {exc}", is_error=True)
+    return _result(reply or _NO_OUTPUT)
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +76,7 @@ def _run(script: str, overall: float = _REPLY_WINDOW) -> str:
 _GENERATED: dict[str, GeneratedTool] = {gt.name: gt for gt in build_generated_tools()}
 
 
-def _run_generated(gt: GeneratedTool, args: dict) -> str:
+def _run_generated(gt: GeneratedTool, args: dict) -> types.CallToolResult:
     # build() can take a while; give bank builds a generous window.
     overall = _BUILD_WINDOW if gt.spec["member"].lower().startswith("build") else _REPLY_WINDOW
     return _run(gt.build_js(args), overall=overall)
@@ -145,12 +163,12 @@ def _generic_script(name: str, a: dict) -> str | None:
         return (f"var __o = studio.project.lookup({_q(a['target'])}); "
                 f"if (!__o) 'not found'; else {{ __o[{_q(a['property'])}] = {embed_value(a['value'])}; "
                 f"'set ' + {_q(a['property'])}; }}")
-    if name in ("fmod_add_relationship", "fmod_remove_relationship"):
-        op = "add" if name.endswith("add_relationship") else "remove"
+    if name in _RELATIONSHIP_OPS:
+        op, done = _RELATIONSHIP_OPS[name]
         return (f"var __o = studio.project.lookup({_q(a['target'])}); "
                 f"var __x = studio.project.lookup({_q(a['other'])}); "
                 f"if (!__o || !__x) 'not found'; else {{ __o.relationships[{_q(a['relationship'])}].{op}(__x); "
-                f"'{op}ed'; }}")
+                f"'{done}'; }}")
     if name == "fmod_class_names":
         return "JSON.stringify(Object.keys(studio.project.model).sort());"
     if name == "fmod_describe_class":
@@ -165,10 +183,10 @@ def _generic_script(name: str, a: dict) -> str | None:
     return None
 
 
-def _generic_dispatch(name: str, a: dict) -> str:
+def _generic_dispatch(name: str, a: dict) -> types.CallToolResult:
     script = _generic_script(name, a)
     if script is None:
-        return f"ERROR: unknown tool {name}"
+        return _result(f"ERROR: unknown tool {name}", is_error=True)
     return _run(script)
 
 
@@ -205,13 +223,11 @@ async def list_tools() -> list[types.Tool]:
 
 
 @app.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+async def call_tool(name: str, arguments: dict) -> types.CallToolResult:
     args = arguments or {}
     if name in _GENERATED:
-        text = _run_generated(_GENERATED[name], args)
-    else:
-        text = _generic_dispatch(name, args)
-    return [types.TextContent(type="text", text=text)]
+        return _run_generated(_GENERATED[name], args)
+    return _generic_dispatch(name, args)
 
 
 async def main() -> None:
