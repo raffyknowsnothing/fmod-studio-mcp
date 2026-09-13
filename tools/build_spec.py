@@ -111,7 +111,8 @@ def main():
             sig_text = text_of(pre.group(1)) if pre else title
             # A method's signature shows "(...)"; a property accessor never does.
             kind = "method" if "(" in sig_text else "property"
-            immutable = "Immutable." in text_of(block)
+            block_text = text_of(block)
+            immutable = "Immutable." in block_text
             params = parse_params(sig_text) if kind == "method" else []
 
             docs = {re.sub(r"[^A-Za-z0-9_]", "", text_of(dt)): text_of(dd)
@@ -121,7 +122,7 @@ def main():
 
             pm = re.search(r"<p[^>]*>(.*?)</p>", block, re.S)
             desc = text_of(pm.group(1)) if pm else ""
-            rm = re.search(r"Returns?\b([^.]*\.)", text_of(block))
+            rm = re.search(r"Returns?\b([^.]*\.)", block_text)
             ret = ("Returns" + rm.group(1)).strip() if rm else ""
 
             if owner == "":

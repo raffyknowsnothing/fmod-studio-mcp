@@ -16,7 +16,6 @@ Config via env: FMOD_STUDIO_HOST (default 127.0.0.1), FMOD_STUDIO_PORT (3663).
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 
@@ -30,6 +29,12 @@ from .generation import GeneratedTool, build_generated_tools, embed_value, _DESC
 HOST = os.environ.get("FMOD_STUDIO_HOST", "127.0.0.1")
 PORT = int(os.environ.get("FMOD_STUDIO_PORT", "3663"))
 
+# Seconds to keep reading a reply before giving up. A project build is the one
+# call that legitimately runs long, so it gets its own window.
+_REPLY_WINDOW = 30.0
+_BUILD_WINDOW = 180.0
+_NO_OUTPUT = "(no output)"
+
 app = Server("fmod-studio-mcp")
 TERMINAL = FmodTerminal(HOST, PORT)
 
@@ -38,12 +43,12 @@ def _q(value) -> str:
     return json.dumps(str(value))
 
 
-def _run(script: str, overall: float = 30.0) -> str:
+def _run(script: str, overall: float = _REPLY_WINDOW) -> str:
     try:
         reply = TERMINAL.run(script, overall=overall)
     except FmodTerminalError as exc:
         return f"ERROR: {exc}"
-    return reply if reply else "(no output)"
+    return reply or _NO_OUTPUT
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +60,7 @@ _GENERATED: dict[str, GeneratedTool] = {gt.name: gt for gt in build_generated_to
 
 def _run_generated(gt: GeneratedTool, args: dict) -> str:
     # build() can take a while; give bank builds a generous window.
-    overall = 180.0 if gt.spec["member"].lower().startswith("build") else 30.0
+    overall = _BUILD_WINDOW if gt.spec["member"].lower().startswith("build") else _REPLY_WINDOW
     return _run(gt.build_js(args), overall=overall)
 
 
@@ -127,32 +132,44 @@ def _generic_tools() -> list[types.Tool]:
     ]
 
 
-def _generic_dispatch(name: str, a: dict) -> str:
+def _generic_script(name: str, a: dict) -> str | None:
+    """Build the JavaScript for a generic tool, or None if the name is unknown.
+
+    Kept separate from running it so the generated script can be executed and
+    checked on its own.
+    """
     if name == "fmod_get_property":
-        return _run(f"{_DESC} var __o = studio.project.lookup({_q(a['target'])}); "
-                    f"__o ? __desc(__o[{_q(a['property'])}]) : 'not found';")
+        return (f"{_DESC} var __o = studio.project.lookup({_q(a['target'])}); "
+                f"__o ? __desc(__o[{_q(a['property'])}]) : 'not found';")
     if name == "fmod_set_property":
-        return _run(f"var __o = studio.project.lookup({_q(a['target'])}); "
-                    f"if (!__o) 'not found'; else {{ __o[{_q(a['property'])}] = {embed_value(a['value'])}; "
-                    f"'set ' + {_q(a['property'])}; }}")
+        return (f"var __o = studio.project.lookup({_q(a['target'])}); "
+                f"if (!__o) 'not found'; else {{ __o[{_q(a['property'])}] = {embed_value(a['value'])}; "
+                f"'set ' + {_q(a['property'])}; }}")
     if name in ("fmod_add_relationship", "fmod_remove_relationship"):
         op = "add" if name.endswith("add_relationship") else "remove"
-        return _run(f"var __o = studio.project.lookup({_q(a['target'])}); "
-                    f"var __x = studio.project.lookup({_q(a['other'])}); "
-                    f"if (!__o || !__x) 'not found'; else {{ __o.relationships[{_q(a['relationship'])}].{op}(__x); "
-                    f"'{op}ed'; }}")
+        return (f"var __o = studio.project.lookup({_q(a['target'])}); "
+                f"var __x = studio.project.lookup({_q(a['other'])}); "
+                f"if (!__o || !__x) 'not found'; else {{ __o.relationships[{_q(a['relationship'])}].{op}(__x); "
+                f"'{op}ed'; }}")
     if name == "fmod_class_names":
-        return _run("JSON.stringify(Object.keys(studio.project.model).sort());")
+        return "JSON.stringify(Object.keys(studio.project.model).sort());"
     if name == "fmod_describe_class":
-        return _run(
+        return (
             f"var __e = studio.project.model[{_q(a['className'])}]; "
             "__e ? JSON.stringify({"
             "properties: Object.keys(__e.properties), "
             "relationships: Object.keys(__e.relationships)"
             "}, null, 1) : 'unknown class';")
     if name == "fmod_create_event":
-        return _run(_js_create_event(a["name"], a.get("sound"), a.get("bank_name"), a.get("folder_path")))
-    return f"ERROR: unknown tool {name}"
+        return _js_create_event(a["name"], a.get("sound"), a.get("bank_name"), a.get("folder_path"))
+    return None
+
+
+def _generic_dispatch(name: str, a: dict) -> str:
+    script = _generic_script(name, a)
+    if script is None:
+        return f"ERROR: unknown tool {name}"
+    return _run(script)
 
 
 def _js_create_event(name: str, sound, bank_name, folder_path) -> str:
@@ -177,9 +194,14 @@ def _js_create_event(name: str, sound, bank_name, folder_path) -> str:
 # MCP wiring
 # ---------------------------------------------------------------------------
 
+# The advertised tool set is fixed once the spec is loaded, so build it once
+# rather than rebuilding 155 schemas on every tools/list request.
+_TOOLS: list[types.Tool] = _generic_tools() + [gt.tool() for gt in _GENERATED.values()]
+
+
 @app.list_tools()
 async def list_tools() -> list[types.Tool]:
-    return _generic_tools() + [gt.tool() for gt in _GENERATED.values()]
+    return _TOOLS
 
 
 @app.call_tool()
