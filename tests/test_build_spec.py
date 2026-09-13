@@ -8,7 +8,9 @@ the spec the crawler produced.
 
 from __future__ import annotations
 
+import http.server
 import importlib.util
+import threading
 from pathlib import Path
 
 import pytest
@@ -43,6 +45,41 @@ def test_a_failed_fetch_is_an_error_not_an_empty_page(monkeypatch):
     """Silently crawling nothing would drop members from the spec without a word."""
     monkeypatch.setattr(build_spec.subprocess, "run",
                         lambda *a, **k: FakeCompleted(22, "", "curl: (22) 404"))
+    with pytest.raises(RuntimeError) as caught:
+        build_spec.fetch("globals")
+    assert "globals" in str(caught.value)
+
+
+class NotFoundHandler(http.server.BaseHTTPRequestHandler):
+    """Answers every request with 404, like the CDN does for a bad page name."""
+
+    def do_GET(self):  # noqa: N802 - the name is fixed by BaseHTTPRequestHandler
+        self.send_response(404)
+        self.end_headers()
+        self.wfile.write(b"<html>not found</html>")
+
+    def log_message(self, *args):  # keep the test output quiet
+        pass
+
+
+@pytest.fixture
+def not_found_server():
+    server = http.server.HTTPServer(("127.0.0.1", 0), NotFoundHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+
+
+def test_a_missing_page_stops_the_crawl(monkeypatch, not_found_server):
+    """curl exits 0 on an HTTP 404, so a mistyped slug used to parse to zero
+    members and quietly drop tools from the spec.
+
+    The mocked test above only proves the raise happens once curl reports
+    failure. This one runs the real curl against a real 404, which is the only
+    way to show curl is being asked to report it at all.
+    """
+    monkeypatch.setattr(build_spec, "BASE", not_found_server + "/page-{}.html")
     with pytest.raises(RuntimeError) as caught:
         build_spec.fetch("globals")
     assert "globals" in str(caught.value)

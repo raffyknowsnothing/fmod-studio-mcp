@@ -42,8 +42,15 @@ SPEC_PATH = os.path.join(os.path.dirname(__file__), "api_spec.json")
 # Objects that are neither managed (no getPath, no id) nor primitive are the gap:
 # `studio.version` is one, and it carries a useful toString(), while a schema map
 # like Event.relationships carries none and is only readable as JSON. So: prefer
-# toString() when it says something, otherwise fall back to JSON, bounded so a
-# large object cannot pour into the model's context.
+# toString() when it says something, otherwise fall back to JSON.
+#
+# The bound is applied to the WHOLE result by __cap, at the end. __desc's own
+# limit only stops one object from building a huge string; it does not bound a
+# list, whose members are mapped individually. A list of 50 large objects
+# measured 25,751 characters before __cap existed.
+#
+# __render is the single entry point for a value; __cap takes text that is
+# already serialised (fmod_describe_class pretty-prints its JSON).
 _DESC = (
     "var __DESC_MAX = 4000;"
     "function __desc(x){"
@@ -59,6 +66,9 @@ _DESC = (
     "__j.slice(0,__DESC_MAX)+'\u2026 ('+__j.length+' chars total)':__j;}catch(e){}"
     "return __s;}"
     "return String(x);}"
+    "function __cap(s){s=String(s);return s.length>__DESC_MAX?"
+    "s.slice(0,__DESC_MAX)+'\u2026 ('+s.length+' chars total)':s;}"
+    "function __render(x){return __cap(__desc(x));}"
 )
 
 _PATH_RE = re.compile(r"^(event|bank|bus|vca|snapshot|parameter|tag|preset):/")
@@ -195,7 +205,7 @@ class GeneratedTool:
                 expr = f"({access} = {embed_value(args['value'])})"
             else:
                 expr = access
-        return f"{_DESC} __desc({expr});"
+        return f"{_DESC} __render({expr});"
 
 
 def load_spec(path: str = SPEC_PATH) -> list[dict]:

@@ -7,7 +7,7 @@ so it covers all 148 generated tools rather than a sample.
 
 from __future__ import annotations
 
-from fmod_studio_mcp.generation import build_generated_tools, embed_value
+from fmod_studio_mcp.generation import _DESC, build_generated_tools, embed_value
 from fmod_studio_mcp.server import _GENERATED
 
 
@@ -19,13 +19,28 @@ def args_for(tool) -> dict:
     return args
 
 
+def expression_of(tool) -> str:
+    """The part of a script after the helper, which is what does the work."""
+    return tool.build_js(args_for(tool))[len(_DESC):]
+
+
 def test_every_member_in_the_spec_generates_a_script():
     tools = build_generated_tools()
     assert len(tools) == 148
     for tool in tools:
         script = tool.build_js(args_for(tool))
         assert script.strip(), tool.name
-        assert "__desc(" in script, tool.name
+        assert "__render(" in script, tool.name
+
+
+def test_every_generated_tool_bounds_its_result():
+    """__cap is what bounds a result, and it runs at the end of the pipeline. A
+    call site that reaches for __desc directly is unbounded, so this walks all
+    148 of them rather than trusting the one that was spot-checked."""
+    for tool in build_generated_tools():
+        expression = expression_of(tool)
+        assert "__render(" in expression, tool.name
+        assert "__desc(" not in expression, tool.name
 
 
 def test_every_tool_name_is_unique_and_namespaced():
@@ -65,7 +80,7 @@ def test_a_global_member_is_a_bare_call():
 
 def test_a_property_reads_when_no_value_is_given():
     script = _GENERATED["fmod_project_filePath"].build_js({})
-    assert script.endswith("__desc(studio.project.filePath);")
+    assert script.endswith("__render(studio.project.filePath);")
 
 
 def test_a_settable_property_writes_when_a_value_is_given():

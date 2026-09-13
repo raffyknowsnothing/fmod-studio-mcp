@@ -49,11 +49,12 @@ PARAM_DT = re.compile(r"<dt[^>]*>(.*?)</dt>\s*<dd[^>]*>(.*?)</dd>", re.S)
 def fetch(slug):
     """Fetch one page of the reference.
 
-    Raises if curl failed. An empty page parses to zero members, which would
-    quietly drop tools from the generated spec.
+    Raises if the page could not be retrieved. ``--fail`` matters here: without
+    it curl exits 0 on an HTTP error, so a mistyped slug would return the CDN's
+    404 page, parse to zero members, and quietly drop tools from the spec.
     """
     url = BASE.format(slug)
-    proc = subprocess.run(["curl", "-sL", "-A", "Mozilla/5.0", url],
+    proc = subprocess.run(["curl", "-sL", "--fail", "-A", "Mozilla/5.0", url],
                           capture_output=True, text=True, timeout=30)
     if proc.returncode != 0:
         raise RuntimeError(f"Could not fetch {slug!r} from {url}: "

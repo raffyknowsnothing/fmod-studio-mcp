@@ -59,16 +59,27 @@ CASES = {
     "primitive_array": ("[1, 2.5, true, false, null, \"hi\"]", '["1","2.5","true","false","null","hi"]'),
 }
 
+# A getPath that is *present but throws* is not a shape FMOD produces: of the 63
+# model classes, 53 have no getPath and 0 of the 63 throw when it is called. The
+# helper therefore does not paper over one. Swallowing the throw would hand back
+# the object's id as if it were the path, which is a wrong answer; letting it
+# out means the call fails where the caller can see it.
+THROWING_GETPATH = '{ getPath: function () { throw new Error("boom"); }, id: "{c}" }'
 
 
-def render(cases_js: str) -> dict:
+def render_raw(cases_js: str):
+    """Run the helper and hand back the raw result, so a failure can be seen."""
     script = _DESC + "\n" + f"""
 var __cases = {cases_js};
 var __out = {{}};
 Object.keys(__cases).forEach(function (k) {{ __out[k] = __desc(__cases[k]); }});
 console.log(JSON.stringify(__out));
 """
-    proc = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+    return subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+
+
+def render(cases_js: str) -> dict:
+    proc = render_raw(cases_js)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
 
@@ -89,3 +100,42 @@ def test_a_huge_object_is_truncated_and_says_so():
     assert out.startswith('{"k0":0')
     assert "chars total" in out
     assert len(out) < 6000
+
+
+def test_a_getpath_that_throws_is_reported_not_hidden():
+    """Silently falling back to the id would report a path that does not exist,
+    which is worse than failing. The typeof guard covers every real shape; a
+    getPath that exists and throws is a genuine fault and must surface."""
+    proc = render_raw(f"{{ v: {THROWING_GETPATH} }}")
+    assert proc.returncode != 0, f"the throw was swallowed: {proc.stdout!r}"
+    assert "boom" in proc.stderr
+
+
+def render_result(value_js: str) -> str:
+    """Render one value the way a tool returns it.
+
+    ``__render`` is the single entry point every generated and generic tool
+    uses, so this exercises the same path the server does rather than a
+    copy of it.
+    """
+    script = _DESC + "\n" + f"console.log(__render({value_js}));"
+    proc = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.rstrip("\n")
+
+
+def test_a_large_list_is_bounded_not_only_a_large_object():
+    """The bound has to cover the whole result. It used to sit inside the object
+    branch, and the array branch maps over its members with no total limit, so a
+    list of 50 large objects rendered to 243,351 characters."""
+    big = "[" + ",".join('{ a: "%s" }' % ("x" * 500) for _ in range(50)) + "]"
+    out = render_result(big)
+    assert "chars total" in out, "the list was not bounded"
+    assert len(out) < 4200, f"rendered {len(out)} characters"
+
+
+def test_a_small_result_is_not_truncated():
+    """A bound that mangles ordinary answers is worse than none: results are
+    chained back in as a `target`, so they have to stay usable."""
+    assert render_result('"event:/SFX/Hit"') == "event:/SFX/Hit"
+    assert render_result("42") == "42"

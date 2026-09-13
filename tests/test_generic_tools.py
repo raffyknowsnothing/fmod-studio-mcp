@@ -9,11 +9,31 @@ from __future__ import annotations
 
 import json
 
-from fmod_studio_mcp.server import _generic_script
+from fmod_studio_mcp.server import _generic_script, _generic_tools
 
 from conftest import requires_node
 
 pytestmark = requires_node
+
+# Tools whose reply is a value read out of the PROJECT, so nothing the server
+# controls bounds its size. Each one must route through a capped entry point.
+VALUE_REPLY_TOOLS = {
+    "fmod_get_property": {"target": "event:/A", "property": "pad"},
+}
+
+# Tools whose reply size is fixed by the API surface or is a constant sentence.
+# There is nothing to bound: whatever the project contains, they answer with the
+# same shape. fmod_class_names is here rather than above on purpose: its list
+# comes from FMOD's entity registry, it measured 3,684 characters on 2.03.13,
+# and truncating it would break class discovery.
+FIXED_REPLY_TOOLS = {
+    "fmod_class_names": {},
+    "fmod_describe_class": {"className": "Event"},
+    "fmod_set_property": {"target": "event:/A", "property": "name", "value": "x"},
+    "fmod_add_relationship": {"target": "event:/A", "relationship": "banks", "other": "bank:/Master"},
+    "fmod_remove_relationship": {"target": "event:/A", "relationship": "banks", "other": "bank:/Master"},
+    "fmod_create_event": {"name": "X"},
+}
 
 # A stand-in for the slice of the FMOD model these tools touch. It records the
 # calls it receives, so a test can prove which method actually ran.
@@ -77,3 +97,32 @@ def test_a_missing_object_is_reported_not_guessed(run_node):
 
 def test_an_unknown_tool_builds_no_script():
     assert _generic_script("fmod_nonexistent", {}) is None
+
+
+def test_every_generic_tool_is_classified():
+    """A new generic tool has to be added to one of the two sets above. Without
+    this it could return an unbounded value and nothing would notice."""
+    advertised = {tool.name for tool in _generic_tools()}
+    assert advertised == set(VALUE_REPLY_TOOLS) | set(FIXED_REPLY_TOOLS)
+
+
+def test_every_generic_tool_that_returns_a_value_bounds_it():
+    for name, args in VALUE_REPLY_TOOLS.items():
+        script = _generic_script(name, args)
+        assert "__render(" in script or "__cap(" in script, name
+
+
+def test_a_large_property_is_bounded(run_node):
+    """``fmod_get_property`` can return a whole relationship list. The bound has
+    to cover that, not just the single-object case."""
+    fake = """
+    var studio = { project: { lookup: function () {
+      var a = [];
+      for (var i = 0; i < 50; i++) a.push({ pad: new Array(500).join("z") });
+      return { pad: a };
+    } } };
+    """
+    script = _generic_script("fmod_get_property", {"target": "event:/A", "property": "pad"})
+    out = run_node(fake + f"\nconsole.log(String(eval({json.dumps(script)})));")
+    assert "chars total" in out, "the list was not bounded"
+    assert len(out.strip()) < 4200, f"rendered {len(out.strip())} characters"

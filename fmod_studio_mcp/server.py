@@ -158,7 +158,7 @@ def _generic_script(name: str, a: dict) -> str | None:
     """
     if name == "fmod_get_property":
         return (f"{_DESC} var __o = studio.project.lookup({_q(a['target'])}); "
-                f"__o ? __desc(__o[{_q(a['property'])}]) : 'not found';")
+                f"__o ? __render(__o[{_q(a['property'])}]) : 'not found';")
     if name == "fmod_set_property":
         return (f"var __o = studio.project.lookup({_q(a['target'])}); "
                 f"if (!__o) 'not found'; else {{ __o[{_q(a['property'])}] = {embed_value(a['value'])}; "
@@ -170,8 +170,14 @@ def _generic_script(name: str, a: dict) -> str | None:
                 f"if (!__o || !__x) 'not found'; else {{ __o.relationships[{_q(a['relationship'])}].{op}(__x); "
                 f"'{done}'; }}")
     if name == "fmod_class_names":
+        # Deliberately uncapped. This list is set by FMOD's entity registry, not
+        # by project content, so there is nothing here to flood with. It measured
+        # 3,684 characters on 2.03.13, near enough to the 4,000 bound that capping
+        # it would break class discovery outright on a fatter FMOD build.
         return "JSON.stringify(Object.keys(studio.project.model).sort());"
     if name == "fmod_describe_class":
+        # Uncapped for the same reason: the property and relationship names come
+        # from the class schema, which is fixed. It measured 551-822 characters.
         return (
             f"var __e = studio.project.model[{_q(a['className'])}]; "
             "__e ? JSON.stringify({"
