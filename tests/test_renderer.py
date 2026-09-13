@@ -36,6 +36,13 @@ MANAGED_OBJECT = '{ getPath: function () { return "event:/SFX/Hit"; } }'
 FOLDER_OBJECT = '{ id: "{a1935f59-5c41-439f-a224-d6517b1fa236}", entity: "MasterEventFolder" }'
 # An object that answers getPath with something that is not a function.
 NOT_A_FUNCTION = '{ getPath: 42, id: "{b}" }'
+# A newly created object has an empty name, and FMOD renders its path with no
+# name segment at all, so it is the parent's path. Observed on a live 2.03.13
+# terminal: three ``studio.project.create('Bank')`` calls each returned the
+# identical string "bank:/", and two ``MixerGroup`` calls each returned "bus:/".
+# Two distinct objects, therefore, that this helper must not render identically.
+NAMELESS_BANK_A = '{ getPath: function () { return "bank:/"; }, id: "{1111-aaaa}", entity: "Bank" }'
+NAMELESS_BANK_B = '{ getPath: function () { return "bank:/"; }, id: "{2222-bbbb}", entity: "Bank" }'
 
 CASES = {
     # a managed object still reports its path, which is what makes results chain
@@ -57,6 +64,17 @@ CASES = {
     # Array members go through the same rule as a single value, so they come out
     # as strings. That is the existing contract, kept here deliberately.
     "primitive_array": ("[1, 2.5, true, false, null, \"hi\"]", '["1","2.5","true","false","null","hi"]'),
+    # a nameless object has the same path as its parent, so the path alone cannot
+    # tell two of them apart. The id is what makes the reply usable, and
+    # '{guid}' is an addressing form lookup already accepts.
+    "nameless_object": (NAMELESS_BANK_A, "bank:/ {1111-aaaa}"),
+    # two banks made by two create calls, which used to render identically
+    "two_nameless_objects": (f"[{NAMELESS_BANK_A}, {NAMELESS_BANK_B}]",
+                             '["bank:/ {1111-aaaa}","bank:/ {2222-bbbb}"]'),
+    # a bank with a real name keeps reporting just its path, so results still
+    # chain back in as a target
+    "a_named_object_is_not_padded": ('{ getPath: function () { return "bank:/Master"; }, id: "{3333-cccc}" }',
+                                     "bank:/Master"),
 }
 
 # A getPath that is *present but throws* is not a shape FMOD produces: of the 63

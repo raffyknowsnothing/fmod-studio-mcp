@@ -30,6 +30,15 @@ from mcp import types
 
 SPEC_PATH = os.path.join(os.path.dirname(__file__), "api_spec.json")
 
+# A path that identifies its subject ends in a name segment, as in `bank:/Master`.
+# One that stops at the separator carries no name at all and is therefore the
+# parent's path restated. FMOD renders a nameless object exactly that way:
+# observed on a live 2.03.13 terminal, three `studio.project.create('Bank')`
+# calls each answered `bank:/` and two `MixerGroup` calls each answered `bus:/`.
+# Two distinct objects must not render the same text, or a caller can neither
+# tell them apart nor address the one it wants.
+_PATH_PREFIX_RE = re.compile(r"^[a-z]+:/$")
+
 # A JS helper, prepended to every generated script, that renders any result as a
 # stable string: objects -> their path or id (so results can be chained back in as
 # a `target`), arrays -> a JSON list of the same, primitives -> String().
@@ -38,6 +47,12 @@ SPEC_PATH = os.path.join(os.path.dirname(__file__), "api_spec.json")
 # MixerStrip, ParameterPreset); a folder, track, sound or asset does not. The
 # live terminal 2.03.13 answers `studio.project.lookup("event:/").getPath()` with
 # "TypeError: not a function", so the member must be type-checked, never assumed.
+#
+# getPath() is also not always the *object's* path. A newly created object has an
+# empty name, so FMOD reports the parent's path, and the id is the only thing
+# left that identifies it. The id is added in that one case, and it is what makes
+# the reply usable: `{guid}` is an addressing form `project.lookup` accepts, so a
+# caller can name the object it just made without a save-and-read trip to disk.
 #
 # Objects that are neither managed (no getPath, no id) nor primitive are the gap:
 # `studio.version` is one, and it carries a useful toString(), while a schema map
@@ -53,11 +68,16 @@ SPEC_PATH = os.path.join(os.path.dirname(__file__), "api_spec.json")
 # already serialised (fmod_describe_class pretty-prints its JSON).
 _DESC = (
     "var __DESC_MAX = 4000;"
+    "var __PATH_PREFIX=" + json.dumps(_PATH_PREFIX_RE.pattern) + ";"
     "function __desc(x){"
     "if(x===null||x===undefined)return String(x);"
     "if(Array.isArray(x))return JSON.stringify(x.map(__desc));"
     "if(typeof x==='object'){"
-    "if(typeof x.getPath==='function')return x.getPath();"
+    "if(typeof x.getPath==='function'){"
+    "var __p=x.getPath();"
+    "if(typeof __p==='string'&&new RegExp(__PATH_PREFIX).test(__p)&&x.id!==undefined)"
+    "return __p+' '+String(x.id);"
+    "return __p;}"
     "if(x.id!==undefined)return String(x.id);"
     "var __s=String(x);"
     "if(__s!=='[object Object]')return __s;"
