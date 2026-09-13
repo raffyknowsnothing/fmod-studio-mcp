@@ -30,12 +30,24 @@ pytestmark = pytest.mark.skipif(NODE is None, reason="node is needed to execute 
 
 VERSION_OBJECT = '{ toString: function () { return "Version 2.03.13, 64-bit, Qt 6.5.3 under LGPL, Build #162576"; } }'
 MANAGED_OBJECT = '{ getPath: function () { return "event:/SFX/Hit"; } }'
+# What studio.project.lookup("event:/") actually returns: a folder, which has an
+# id and an entity but NO getPath. getPath() is defined on Event, Bank,
+# MixerStrip and ParameterPreset only, so the helper must not assume it.
+FOLDER_OBJECT = '{ id: "{a1935f59-5c41-439f-a224-d6517b1fa236}", entity: "MasterEventFolder" }'
+# An object that answers getPath with something that is not a function.
+NOT_A_FUNCTION = '{ getPath: 42, id: "{b}" }'
 
 CASES = {
     # a managed object still reports its path, which is what makes results chain
     "managed": (MANAGED_OBJECT, "event:/SFX/Hit"),
     "managed_array": (f"[{MANAGED_OBJECT}, 2]", '["event:/SFX/Hit","2"]'),
     "id_only": ('{ id: "{1234-5678}" }', "{1234-5678}"),
+    # the regression: a folder has no getPath, and asking for one used to throw
+    # "TypeError: not a function" on a live 2.03.13 terminal.
+    "folder_without_getpath": (FOLDER_OBJECT, "{a1935f59-5c41-439f-a224-d6517b1fa236}"),
+    "folder_in_array": (f"[{FOLDER_OBJECT}]", '["{a1935f59-5c41-439f-a224-d6517b1fa236}"]'),
+    # a getPath that is not callable must fall through, not throw
+    "non_callable_getpath": (NOT_A_FUNCTION, "{b}"),
     # an object with its own toString, like studio.version, keeps that text
     "custom_tostring": (VERSION_OBJECT, "Version 2.03.13, 64-bit, Qt 6.5.3 under LGPL, Build #162576"),
     # a plain object has no useful String(), so its contents are the answer
@@ -45,6 +57,12 @@ CASES = {
     # Array members go through the same rule as a single value, so they come out
     # as strings. That is the existing contract, kept here deliberately.
     "primitive_array": ("[1, 2.5, true, false, null, \"hi\"]", '["1","2.5","true","false","null","hi"]'),
+}
+
+# A getPath that throws is still a real failure and must not be reported as a
+# successful read, but it must not take the whole helper down by escaping.
+CASES_THAT_MUST_NOT_THROW = {
+    "throwing_getpath": '{ getPath: function () { throw new Error("boom"); }, id: "{c}" }',
 }
 
 
@@ -76,3 +94,11 @@ def test_a_huge_object_is_truncated_and_says_so():
     assert out.startswith('{"k0":0')
     assert "chars total" in out
     assert len(out) < 6000
+
+
+@pytest.mark.parametrize("name", sorted(CASES_THAT_MUST_NOT_THROW))
+def test_a_member_that_throws_does_not_break_the_renderer(name):
+    """``__desc`` runs after every generated call, so it must never be the thing
+    that fails: a throwing member falls through to the next branch instead."""
+    js = CASES_THAT_MUST_NOT_THROW[name]
+    assert render(f"{{ v: {js} }}")["v"] == "{c}"

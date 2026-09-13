@@ -34,6 +34,11 @@ SPEC_PATH = os.path.join(os.path.dirname(__file__), "api_spec.json")
 # stable string: objects -> their path or id (so results can be chained back in as
 # a `target`), arrays -> a JSON list of the same, primitives -> String().
 #
+# getPath() is NOT on every object. Only four entity types have it (Bank, Event,
+# MixerStrip, ParameterPreset); a folder, track, sound or asset does not. The
+# live terminal 2.03.13 answers `studio.project.lookup("event:/").getPath()` with
+# "TypeError: not a function", so the member must be type-checked, never assumed.
+#
 # Objects that are neither managed (no getPath, no id) nor primitive are the gap:
 # `studio.version` is one, and it carries a useful toString(), while a schema map
 # like Event.relationships carries none and is only readable as JSON. So: prefer
@@ -45,7 +50,7 @@ _DESC = (
     "if(x===null||x===undefined)return String(x);"
     "if(Array.isArray(x))return JSON.stringify(x.map(__desc));"
     "if(typeof x==='object'){"
-    "if(typeof x.getPath==='function')return x.getPath();"
+    "if(typeof x.getPath==='function'){try{return x.getPath();}catch(e){}}"
     "if(x.id!==undefined)return String(x.id);"
     "var __s=String(x);"
     "if(__s!=='[object Object]')return __s;"
@@ -102,9 +107,17 @@ class GeneratedTool:
         required: list[str] = []
         tk = self.spec["target_kind"]
         if tk == "instance":
+            # The member belongs to one entity type, not to ManagedObject at large:
+            # `getPath` exists on Event and Bank but not on a folder or a track, and
+            # calling it on the wrong one throws "TypeError: not a function" inside
+            # Studio. Naming the expected type in the schema is what lets the caller
+            # pick a target that can actually answer.
             props["target"] = {
                 "type": "string",
-                "description": "Object to act on: a path (e.g. 'event:/SFX/Hit', 'bank:/Master') or a '{guid}'.",
+                "description": f"Object to act on: a path (e.g. 'event:/SFX/Hit', 'bank:/Master') "
+                               f"or a '{{guid}}'. This member is defined on "
+                               f"{self.spec['owner']}, not on every object, so the target "
+                               f"has to be one.",
             }
             required.append("target")
         elif tk == "entity":
