@@ -25,6 +25,7 @@ from mcp import types
 
 from .client import FmodTerminal, FmodTerminalError
 from .generation import GeneratedTool, build_generated_tools, embed_value, _DESC
+from . import guardrails
 
 HOST = os.environ.get("FMOD_STUDIO_HOST", "127.0.0.1")
 PORT = int(os.environ.get("FMOD_STUDIO_PORT", "3663"))
@@ -80,7 +81,11 @@ _GENERATED: dict[str, GeneratedTool] = {gt.name: gt for gt in build_generated_to
 def _run_generated(gt: GeneratedTool, args: dict) -> types.CallToolResult:
     # build() can take a while; give bank builds a generous window.
     overall = _BUILD_WINDOW if gt.spec["member"].lower().startswith("build") else _REPLY_WINDOW
-    return _run(gt.build_js(args), overall=overall)
+    # A member that can move or destroy data answers with a read-back instead of
+    # its ordinary reply, so the caller sees which object it touched. Everything
+    # else keeps the plain generated script.
+    script = guardrails.generated_script(gt, args) or gt.build_js(args)
+    return _run(script, overall=overall)
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +199,10 @@ def _generic_dispatch(name: str, a: dict) -> types.CallToolResult:
     script = _generic_script(name, a)
     if script is None:
         return _result(f"ERROR: unknown tool {name}", is_error=True)
-    return _run(script)
+    # `fmod_set_property` is the wide door: it writes any property on any object.
+    # Its guarded form reports the value before and after, so a wrong target is
+    # visible in the reply rather than discovered later.
+    return _run(guardrails.generic_script(name, a) or script)
 
 
 def _js_create_event(name: str, sound, bank_name, folder_path) -> str:
