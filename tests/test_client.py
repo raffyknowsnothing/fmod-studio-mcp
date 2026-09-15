@@ -15,6 +15,9 @@ FMOD Studio 2.03.13 terminal, so the shapes are observed rather than invented:
 
 from __future__ import annotations
 
+import socket
+import time
+
 import pytest
 
 from fmod_studio_mcp.client import FmodTerminal, FmodTerminalError
@@ -66,6 +69,39 @@ class FakeSocket:
 
     def close(self) -> None:
         self.closed = True
+
+
+class SlowSocket(FakeSocket):
+    """A socket whose reply only becomes available after `delay` seconds.
+
+    `FakeSocket` hands its reply over instantly, so it cannot tell a client that
+    waits for a slow script from one that gives up early. This one honours
+    ``settimeout``: it blocks up to the timeout it was given, and raises
+    :class:`socket.timeout` only if the reply is still not ready by then, which
+    is what a real socket does.
+    """
+
+    def __init__(self, reply: bytes, delay: float):
+        super().__init__()
+        self._reply = reply
+        self._delay = delay
+        self._ready_at: float | None = None
+
+    def sendall(self, payload: bytes) -> None:
+        self.sent.append(payload)
+        if self._ready_at is None:
+            self._ready_at = time.monotonic() + self._delay
+
+    def recv(self, _n: int) -> bytes:
+        if self._ready_at is None:
+            return b""
+        wait = self._ready_at - time.monotonic()
+        if wait > 0:
+            time.sleep(min(wait, self.timeout or 0))
+        if time.monotonic() < self._ready_at:
+            raise socket.timeout()
+        self._ready_at = None
+        return self._reply
 
 
 def terminal_replying(*replies: bytes) -> FmodTerminal:
@@ -147,3 +183,32 @@ def test_a_failure_after_reconnect_is_still_a_readable_error(monkeypatch):
                         lambda *a, **k: second)
     with pytest.raises(FmodTerminalError):
         terminal.run("1+1")
+
+
+def test_a_slow_reply_goes_to_the_call_that_asked_for_it():
+    """A script slower than the idle window must not lose its reply.
+
+    Observed live against FMOD Studio 2.03.13: a call whose script took 1.09 s
+    returned ``None`` after exactly 0.401 s, and the *next* call, asking for
+    ``'MARKER-C'``, came back with ``'449999985000000\\nMARKER-C'``. The second
+    caller was handed the first caller's answer.
+
+    The delay here (0.6 s) is deliberately longer than READ_IDLE (0.4 s) and
+    shorter than the overall window, which is the band the bug lived in.
+    """
+    terminal = FmodTerminal()
+    terminal._sock = SlowSocket(VALUE_REPLY, delay=0.6)
+    assert terminal.run("slow()") == "42"
+
+
+def test_a_fast_reply_does_not_pay_the_overall_deadline():
+    """The fix waits out `overall` only for the *first* byte.
+
+    Once a reply has started, a quiet socket ends it, so an ordinary exchange
+    still costs the idle window rather than the deadline.
+    """
+    terminal = FmodTerminal()
+    terminal._sock = SlowSocket(VALUE_REPLY, delay=0.0)
+    started = time.monotonic()
+    assert terminal.run("fast()") == "42"
+    assert time.monotonic() - started < 1.0

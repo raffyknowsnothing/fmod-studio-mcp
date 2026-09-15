@@ -128,20 +128,48 @@ class FmodTerminal:
     # -- io -----------------------------------------------------------------
 
     def _read_until_idle(self, idle: float, overall: float) -> str:
+        """Read one reply, which ends when the socket has been quiet for `idle`.
+
+        Two different silences arrive on this socket and they must not be
+        treated alike:
+
+        * **Quiet before the first byte** means the script has not answered yet.
+          Waiting only `idle` here was a real defect: any script slower than
+          `idle` looked like a script that produced nothing, the read returned
+          ``None``, and the real reply stayed in the buffer for the *next*
+          caller to read. Observed live: a call whose script took 1.09 s
+          returned ``None``, and the following call, asking for ``'MARKER-C'``,
+          came back with ``'449999985000000\\nMARKER-C'``. A caller was handed
+          the answer to a different operation, which is exactly what the
+          guardrail read-backs exist to prevent. So before the first byte we
+          wait out the caller's own `overall` deadline instead.
+
+        * **Quiet after the first byte** means the reply has finished, because
+          the terminal may send several NUL-terminated messages for one script
+          (`log()` then `error()`), so the first NUL is not the end. Only there
+          is `idle` the right thing to measure.
+        """
         assert self._sock is not None
         chunks: list[bytes] = []
         deadline = time.monotonic() + overall
-        self._sock.settimeout(idle)
-        while time.monotonic() < deadline:
+        started = False
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            self._sock.settimeout(idle if started else remaining)
             try:
                 data = self._sock.recv(RECV_BYTES)
             except socket.timeout:
+                # Before the first byte this can only mean `remaining` elapsed,
+                # since that is what the socket was waiting for.
                 break
             except OSError:
                 break
             if not data:
                 break
             chunks.append(data)
+            started = True
         return b"".join(chunks).decode("utf-8", errors="replace")
 
     def run(self, script: str, idle: float = READ_IDLE, overall: float = READ_WINDOW) -> str | None:
