@@ -21,7 +21,28 @@ def args_for(tool) -> dict:
 
 def expression_of(tool) -> str:
     """The part of a script after the helper, which is what does the work."""
-    return tool.build_js(args_for(tool))[len(_DESC):]
+    return tool.build_js(args_for(tool))[len(_DESC):].strip()
+
+
+# A value shaped like a path, so a member that converts its arguments is forced
+# to convert this one. Used to tell "this member converts" from "it does not".
+PATH_ARG = "event:/SFX/Hit"
+
+
+def expression_of_any_arg(tool) -> str:
+    """The expression a tool renders when every parameter is handed a path.
+
+    ``args_for`` fills parameters with ``"0"``, which never triggers the
+    object conversion, so it cannot answer "does this member convert?". This
+    hands every parameter a path-shaped string instead.
+    """
+    tk = tool.spec["target_kind"]
+    args = {name: PATH_ARG for name in tool.input_schema().get("required", [])}
+    if tk == "instance":
+        args["target"] = PATH_ARG
+    elif tk == "entity":
+        args["className"] = "Event"
+    return tool.build_js(args)[len(_DESC):].strip()
 
 
 def test_every_member_in_the_spec_generates_a_script():
@@ -98,3 +119,65 @@ def test_embedding_keeps_numbers_booleans_and_strings_typed():
     assert embed_value(2.5) == "2.5"
     assert embed_value(True) == "true"
     assert embed_value("hello") == '"hello"'
+
+
+# --- the member that takes the identifier itself ---------------------------------
+#
+# `project.lookup` is the one member whose parameter is the identifier the whole
+# method exists to resolve. Its receiver is already `studio.project`, and
+# embed_value turned the argument into `studio.project.lookup(...)`, so the script
+# came out as a lookup of a lookup:
+#
+#     __render(studio.project.lookup(studio.project.lookup("event:/SFX/footstep")))
+#
+# Observed on a live 2.03.13 terminal against a path that resolves:
+#
+#     studio.project.lookup("event:/Bedtime/vo/emb_vo/vo_emb_bingo_yeah")
+#         -> (ManagedObject:Event), typeof result.lookup === "undefined"
+#     <that result>.lookup(...)
+#         -> ERROR TypeError: not a function   <- no ManagedObject has lookup()
+#
+# So the argument is passed as text, and the receiver still does the resolving.
+
+def test_the_lookup_tool_passes_its_identifier_as_text_not_a_second_lookup():
+    """The regression: fmod_project_lookup failed with `TypeError: not a function`
+    for every valid input, because the identifier was resolved twice."""
+    expr = expression_of_any_arg(_GENERATED["fmod_project_lookup"])
+    assert expr.count("studio.project.lookup(") == 1, expr
+    assert 'studio.project.lookup(studio.project.lookup(' not in expr, expr
+
+
+def test_the_lookup_tool_still_reaches_the_member_on_its_receiver():
+    """The fix must remove the duplicated argument, not the call itself."""
+    expr = expression_of_any_arg(_GENERATED["fmod_project_lookup"])
+    assert expr == '__render(studio.project.lookup("event:/SFX/Hit"));'
+
+
+def test_a_guid_reaches_the_lookup_tool_as_text_too():
+    """A `{guid}` is the other addressing form the member accepts, and it is the
+    form a create reply hands back, so it has to survive the same way a path does."""
+    js = _GENERATED["fmod_project_lookup"].build_js(
+        {"idOrPath": "{907bcc24-689f-4fae-a8c4-7ebb5012eb83}"})
+    assert 'studio.project.lookup("{907bcc24-689f-4fae-a8c4-7ebb5012eb83}")' in js
+    assert js.count("studio.project.lookup(") == 1, js
+
+
+def test_no_other_generated_tool_passes_a_resolved_object():
+    """`project.lookup` is the only member whose argument is the identifier
+    itself, so it must be the only one that skips the conversion. If a second
+    member ever needs the escape, this test is where that decision gets argued."""
+    offenders = [t.name for t in build_generated_tools()
+                 if t.spec["member"] == "lookup"]
+    assert offenders == ["fmod_project_lookup"], offenders
+
+
+def test_every_other_member_still_converts_a_path_argument():
+    """The guard against the fix over-reaching. The conversion is what makes an
+    object-reference parameter work, and 29 members depend on it: a path argument
+    must still arrive as an object everywhere except project.lookup itself."""
+    converted = [t.name for t in build_generated_tools()
+                 if t.spec["member"] != "lookup"
+                 and "studio.project.lookup(" in expression_of_any_arg(t)]
+    assert "fmod_Folder_getItem" in converted, converted
+    assert "fmod_project_deleteObject" in converted, converted
+    assert "fmod_window_navigateTo" in converted, converted

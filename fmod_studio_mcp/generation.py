@@ -95,6 +95,36 @@ _PATH_RE = re.compile(r"^(event|bank|bus|vca|snapshot|parameter|tag|preset):/")
 _GUID_RE = re.compile(r"^\{[0-9a-fA-F-]+\}$")
 _NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
+# `project.lookup` is the one member whose parameter *is* the identifier the
+# member exists to resolve, so the conversion below must not run for it. Its
+# receiver is already `studio.project`, and converting the argument produced a
+# lookup of a lookup:
+#
+#     __render(studio.project.lookup(studio.project.lookup("event:/SFX/footstep")))
+#
+# Observed on a live 2.03.13 terminal, against a path that resolves:
+#
+#     studio.project.lookup("event:/Bedtime/vo/emb_vo/vo_emb_bingo_yeah")
+#         -> (ManagedObject:Event); typeof result.lookup === "undefined"
+#     <that result>.lookup(...)
+#         -> ERROR TypeError: not a function
+#
+# Every valid input failed the same way, and the cause is not the receiver: the
+# inner call is correct, and the outer call cannot exist. It is the argument that
+# has to stay text. No ManagedObject has `.lookup`, so no object this conversion
+# can produce is ever the right argument here.
+_NO_CONVERSION = {("project", "lookup")}
+
+
+def _takes_identifier_verbatim(spec: dict) -> bool:
+    """True for the member that resolves the identifier itself.
+
+    Named as a question about the member rather than as a check in
+    :meth:`GeneratedTool.build_js`, so the escape is one idea in one place and a
+    second member needing it is a one-line change with a test to argue against.
+    """
+    return (spec["owner"], spec["member"]) in _NO_CONVERSION
+
 
 def embed_value(v) -> str:
     """Render a tool-argument value as a JavaScript expression."""
@@ -208,11 +238,13 @@ class GeneratedTool:
     def build_js(self, args: dict) -> str:
         s = self.spec
         recv = self._receiver(args)
+        literal = _takes_identifier_verbatim(s)
         if s["kind"] == "method":
             arg_js = []
             for p in s["params"]:
                 if p["name"] in args and args[p["name"]] is not None:
-                    arg_js.append(embed_value(args[p["name"]]))
+                    raw = str(args[p["name"]]).strip()
+                    arg_js.append(json.dumps(raw) if literal else embed_value(args[p["name"]]))
                 elif not p["optional"]:
                     arg_js.append("undefined")
             call = (s["member"] if s["target_kind"] == "global"
