@@ -36,6 +36,7 @@ pytestmark = requires_node
 TOOLS = {t.name: t for t in build_generated_tools()}
 
 ASSET_GUID = "{aec43b2f-448f-4840-8620-e603ddf8c110}"
+REFUSED_GUID = "{dddddddd-dddd-dddd-dddd-dddddddddddd}"
 EVENT_GUID = "{2d2fff6a-0eff-46e6-97b6-83630487be49}"
 
 # A stand-in for the slice of the FMOD model these tools touch. It records the
@@ -57,11 +58,27 @@ function __mk(path, entity, id) {
 var ASSET = __mk('sfx/SFX_Respawn.ogg', 'Asset', '{aec43b2f-448f-4840-8620-e603ddf8c110}');
 // An object with no address at all: no path that resolves, and no id.
 var ORPHAN = { entity: 'Asset', setAssetPath: function (p) { __calls.push('setAssetPath ' + p); return true; } };
+// An asset whose move is refused: the member reports failure and leaves the
+// path alone. The docs allow this ("Returns `true` if the operation succeeds,
+// or `false` otherwise"), and the reply must not claim a move that did not
+// happen.
+var REFUSED = __mk('sfx/Refused.ogg', 'Asset', '{dddddddd-dddd-dddd-dddd-dddddddddddd}');
+REFUSED.setAssetPath = function (p) { __calls.push('setAssetPath ' + p); return false; };
 var EVENT = __mk('event:/SFX/footstep', 'Event', '{2d2fff6a-0eff-46e6-97b6-83630487be49}');
 EVENT.color = 'Yellow';
-var OBJS = [ASSET, EVENT, ORPHAN];
+var OBJS = [ASSET, EVENT, ORPHAN, REFUSED];
 var studio = {
   project: {
+    // The assets the model holds. `AudioFile` is where an audio file actually
+    // lives; `Asset` is empty live and `EncodableAsset` holds folders, so the
+    // collision pre-check reads this one.
+    model: {
+      AudioFile: {
+        findInstances: function () {
+          return OBJS.filter(function (o) { return o.entity === 'Asset'; });
+        }
+      }
+    },
     lookup: function (p) {
       for (var i = 0; i < OBJS.length; i++) {
         if (OBJS[i]._path === p || OBJS[i].id === p) return OBJS[i];
@@ -149,6 +166,65 @@ def test_set_asset_path_makes_no_call_when_the_target_does_not_resolve(run_node)
     script = guarded("fmod_Asset_setAssetPath", {"target": "{no-such-object}", "filePath": "sfx/x.wav"})
     assert "not found" in run(script, run_node).lower()
     assert calls(script, run_node) == [], "the move went ahead on a target that does not exist"
+
+
+def test_set_asset_path_reports_a_refused_move_as_refused(run_node):
+    """A `false` return means the move did not happen, and the reply must say so.
+
+    The member's own verdict is the only signal a caller gets that the file
+    stayed put. Reporting `moved` regardless would be a confident claim in front
+    of a caller whose asset never left its path.
+    """
+    reply = run(guarded("fmod_Asset_setAssetPath",
+                        {"target": REFUSED_GUID, "filePath": "sfx/elsewhere.ogg"}), run_node)
+    assert "FAILED" in reply, f"a refused move was reported as though it worked: {reply!r}"
+    assert not reply.startswith("moved"), f"the reply claims a move that did not happen: {reply!r}"
+
+
+def test_set_asset_path_still_calls_the_member_when_it_is_refused(run_node):
+    """Reporting the refusal must not turn into refusing to try."""
+    script = guarded("fmod_Asset_setAssetPath",
+                     {"target": REFUSED_GUID, "filePath": "sfx/elsewhere.ogg"})
+    assert calls(script, run_node) == ["setAssetPath sfx/elsewhere.ogg"]
+
+
+def test_set_asset_path_reports_a_successful_move_as_moved(run_node):
+    """The guard against the new branch over-reaching: success still reads `moved`."""
+    reply = run(guarded("fmod_Asset_setAssetPath",
+                        {"target": ASSET_GUID, "filePath": "sfx/Ambient_Sci-Fi.ogg"}), run_node)
+    assert reply.startswith("moved"), f"a successful move is no longer reported as one: {reply!r}"
+
+
+def test_set_asset_path_refuses_a_destination_another_asset_already_claims(run_node):
+    """The collision must be refused before the member is reached.
+
+    FMOD answers a taken destination with an interactive replace/rename/skip
+    prompt and blocks the script until a human answers it. The script never
+    returns, and the terminal refuses every other caller meanwhile, so an agent
+    hangs with no error. Observed live until the prompt was dismissed by hand.
+    """
+    reply = run(guarded("fmod_Asset_setAssetPath",
+                        {"target": ASSET_GUID, "filePath": "sfx/Refused.ogg"}), run_node)
+    assert "REFUSED" in reply, f"a destination collision was not refused: {reply!r}"
+    assert "sfx/Refused.ogg" in reply, f"the refusal does not say which path is taken: {reply!r}"
+
+
+def test_set_asset_path_makes_no_call_when_the_destination_is_claimed(run_node):
+    """A refusal that still moved the file would be worse than the hang."""
+    script = guarded("fmod_Asset_setAssetPath",
+                     {"target": ASSET_GUID, "filePath": "sfx/Refused.ogg"})
+    assert calls(script, run_node) == [], "the move went ahead into a taken destination"
+
+
+def test_set_asset_path_allows_moving_an_asset_onto_its_own_path(run_node):
+    """An asset's own path is not a collision.
+
+    Without excluding the target itself, re-setting an asset to the path it
+    already has would be refused, which is a no-op the caller is entitled to.
+    """
+    reply = run(guarded("fmod_Asset_setAssetPath",
+                        {"target": ASSET_GUID, "filePath": "sfx/SFX_Respawn.ogg"}), run_node)
+    assert "REFUSED" not in reply, f"an asset was refused its own path: {reply!r}"
 
 
 # -- deleteObject: irreversible, so identify before you delete --------------
