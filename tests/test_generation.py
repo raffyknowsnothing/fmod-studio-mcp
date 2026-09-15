@@ -156,10 +156,9 @@ def test_the_lookup_tool_still_reaches_the_member_on_its_receiver():
 def test_a_guid_reaches_the_lookup_tool_as_text_too():
     """A `{guid}` is the other addressing form the member accepts, and it is the
     form a create reply hands back, so it has to survive the same way a path does."""
-    js = _GENERATED["fmod_project_lookup"].build_js(
-        {"idOrPath": "{907bcc24-689f-4fae-a8c4-7ebb5012eb83}"})
-    assert 'studio.project.lookup("{907bcc24-689f-4fae-a8c4-7ebb5012eb83}")' in js
-    assert js.count("studio.project.lookup(") == 1, js
+    tool = _GENERATED["fmod_project_lookup"]
+    expr = tool.build_js({"idOrPath": "{907bcc24-689f-4fae-a8c4-7ebb5012eb83}"})[len(_DESC):].strip()
+    assert expr == '__render(studio.project.lookup("{907bcc24-689f-4fae-a8c4-7ebb5012eb83}"));', expr
 
 
 def test_no_other_generated_tool_passes_a_resolved_object():

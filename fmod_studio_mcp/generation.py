@@ -54,6 +54,25 @@ _PATH_PREFIX_RE = re.compile(r"^[a-z]+:/$")
 # the reply usable: `{guid}` is an addressing form `project.lookup` accepts, so a
 # caller can name the object it just made without a save-and-read trip to disk.
 #
+# A path can also fail to address its subject while looking perfectly ordinary.
+# An event's own mixer strips report paths in the *bus* namespace, and
+# project.lookup does not answer them. Observed on a live 2.03.13 terminal,
+# 2026-09-15, sweeping every model instance whose class answers findInstances and
+# whose object answers getPath: of 2179 checked, 1058 could not be resolved by
+# their own getPath(), and every one of them was an EventMixerGroup (535) or a
+# MixerInput (523). Both are MixerStrip subclasses owned by an event: 523 event
+# timelines each hold an EventMixerGroup reporting `bus:/Audio`, and no two are
+# the same object. So that path addresses none of them, and two of them render
+# identically. This is the reported ghost bus: fmod_get_property(bus:/, 'input')
+# listed a `bus:/voice` that resolves to nothing and answers `undefined` to
+# `name`, `color` and `volume`.
+#
+# So a path is not trusted for being present and well-formed. It is used when
+# project.lookup answers it, which is exactly the question "can a caller hand
+# this back as a target?". When it cannot, the id is the answer instead. The
+# answer is not cached: a cached miss would be wrong the moment the object is
+# renamed, and the check measured 2 ms for a 17-member relationship live.
+#
 # Objects that are neither managed (no getPath, no id) nor primitive are the gap:
 # `studio.version` is one, and it carries a useful toString(), while a schema map
 # like Event.relationships carries none and is only readable as JSON. So: prefer
@@ -69,14 +88,18 @@ _PATH_PREFIX_RE = re.compile(r"^[a-z]+:/$")
 _DESC = (
     "var __DESC_MAX = 4000;"
     "var __PATH_PREFIX=" + json.dumps(_PATH_PREFIX_RE.pattern) + ";"
+    "function __pathOrId(x,p){"
+    "if(!p)return String(x.id);"
+    "try{if(!studio.project.lookup(p))return String(x.id);}catch(e){return p;}"
+    "if(new RegExp(__PATH_PREFIX).test(p))return p+' '+String(x.id);"
+    "return p;}"
     "function __desc(x){"
     "if(x===null||x===undefined)return String(x);"
     "if(Array.isArray(x))return JSON.stringify(x.map(__desc));"
     "if(typeof x==='object'){"
     "if(typeof x.getPath==='function'){"
     "var __p=x.getPath();"
-    "if(typeof __p==='string'&&new RegExp(__PATH_PREFIX).test(__p)&&x.id!==undefined)"
-    "return __p+' '+String(x.id);"
+    "if(typeof __p==='string'&&x.id!==undefined)return __pathOrId(x,__p);"
     "return __p;}"
     "if(x.id!==undefined)return String(x.id);"
     "var __s=String(x);"
